@@ -1,0 +1,435 @@
+
+'use client';
+
+import { useEffect, useState, useRef } from 'react';
+import { useRouter } from 'next/navigation';
+import { DndContext, closestCenter, type DragEndEvent } from '@dnd-kit/core';
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import PptxGenJS from 'pptxgenjs';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
+import { createRoot } from 'react-dom/client';
+
+
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import Loader from '@/components/Loader';
+import { SlideTemplate } from '@/components/templates/SlideTemplate';
+import { type Presentation, type Slide } from '@/lib/types';
+import { TEMPLATES, THEMES } from '@/lib/constants';
+import { FilePlus, Trash2, Eye, Download, Share2, GripVertical, ChevronDown, ImagePlus } from 'lucide-react';
+import { Label } from '@/components/ui/label';
+import { useToast } from '@/hooks/use-toast';
+import Image from 'next/image';
+
+type SortableSlideItemProps = {
+  slide: Slide;
+  index: number;
+  isActive: boolean;
+  onSelect: () => void;
+};
+
+function SortableSlideItem({ slide, index, isActive, onSelect }: SortableSlideItemProps) {
+  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: slide.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} className="relative mb-2">
+      <Card
+        onClick={onSelect}
+        className={`cursor-pointer transition-all ${isActive ? 'border-primary ring-2 ring-primary' : 'border-border hover:border-primary/50'}`}
+      >
+        <CardContent className="p-2 flex items-center space-x-2">
+          <div className="font-medium text-muted-foreground">{index + 1}</div>
+          <div className="w-28 h-16 bg-muted rounded-sm overflow-hidden flex-shrink-0">
+             {slide.imageUrl ? (
+              <Image src={slide.imageUrl} alt={slide.title} width={112} height={63} className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full bg-muted flex items-center justify-center text-muted-foreground">
+                <ImagePlus className="h-6 w-6" />
+              </div>
+            )}
+          </div>
+          <p className="text-xs line-clamp-2 flex-grow">{slide.title}</p>
+          <div {...attributes} {...listeners} className="p-1 cursor-grab touch-none">
+            <GripVertical className="h-5 w-5 text-muted-foreground" />
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export default function EditorPage() {
+  const [presentation, setPresentation] = useState<Presentation | null>(null);
+  const [activeSlideIndex, setActiveSlideIndex] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
+  const router = useRouter();
+  const slideContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    try {
+      const savedPresentation = localStorage.getItem('presentation');
+      if (savedPresentation) {
+        const parsed = JSON.parse(savedPresentation);
+        setPresentation(parsed);
+        if (parsed.slides.length === 0) {
+           addSlide();
+        }
+      } else {
+        router.replace('/create');
+      }
+    } catch (error) {
+      console.error("Failed to load presentation from storage", error);
+      router.replace('/create');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [router]);
+
+  useEffect(() => {
+    if (presentation) {
+      localStorage.setItem('presentation', JSON.stringify(presentation));
+    }
+  }, [presentation]);
+  
+  const handleUpdate = (updates: Partial<Presentation>) => {
+    if (!presentation) return;
+    setPresentation(p => p ? { ...p, ...updates } : null);
+  };
+  
+  const handleSlideContentChange = (index: number, field: keyof Slide, value: any) => {
+    if (!presentation) return;
+    const newSlides = [...presentation.slides];
+    (newSlides[index] as any)[field] = value;
+    handleUpdate({ slides: newSlides });
+  };
+  
+  const handleBulletPointChange = (slideIndex: number, bulletIndex: number, value: string) => {
+    if (!presentation) return;
+    const newSlides = [...presentation.slides];
+    newSlides[slideIndex].bulletPoints[bulletIndex] = value;
+    handleUpdate({ slides: newSlides });
+  };
+
+  const addBulletPoint = (slideIndex: number) => {
+    if (!presentation) return;
+    const newSlides = [...presentation.slides];
+    newSlides[slideIndex].bulletPoints.push("New bullet point");
+    handleUpdate({ slides: newSlides });
+  };
+
+  const removeBulletPoint = (slideIndex: number, bulletIndex: number) => {
+    if (!presentation) return;
+    const newSlides = [...presentation.slides];
+    newSlides[slideIndex].bulletPoints.splice(bulletIndex, 1);
+    handleUpdate({ slides: newSlides });
+  };
+
+  const addSlide = () => {
+    const newSlide: Slide = {
+      id: crypto.randomUUID(),
+      title: 'New Slide Title',
+      bulletPoints: ['Your content here.'],
+      imageUrl: '',
+    };
+    const newSlides = presentation ? [...presentation.slides, newSlide] : [newSlide];
+    handleUpdate({ slides: newSlides });
+    setActiveSlideIndex(newSlides.length - 1);
+  };
+
+  const deleteSlide = (index: number) => {
+    if (!presentation || presentation.slides.length <= 1) return;
+    const newSlides = presentation.slides.filter((_, i) => i !== index);
+    handleUpdate({ slides: newSlides });
+    setActiveSlideIndex(prev => Math.max(0, Math.min(prev, newSlides.length - 1)));
+  };
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (active.id !== over?.id && presentation) {
+      const oldIndex = presentation.slides.findIndex(s => s.id === active.id);
+      const newIndex = presentation.slides.findIndex(s => s.id === over!.id);
+      const newSlides = arrayMove(presentation.slides, oldIndex, newIndex);
+      handleUpdate({ slides: newSlides });
+      setActiveSlideIndex(newIndex);
+    }
+  }
+
+  const exportToPptx = async () => {
+    if (!presentation) return;
+    setIsExporting(true);
+
+    const pptx = new PptxGenJS();
+    pptx.layout = 'LAYOUT_16x9';
+    pptx.title = presentation.title;
+
+    for (const slideData of presentation.slides) {
+      const slide = pptx.addSlide();
+      slide.addText(slideData.title, { x: 0.5, y: 0.25, w: '90%', h: 1, fontSize: 36, bold: true, align: 'center' });
+
+      const bulletPoints = slideData.bulletPoints.map(point => ({ text: point }));
+      if (bulletPoints.length > 0) {
+        slide.addText(bulletPoints, { x: 1, y: 1.5, w: '80%', h: 4, fontSize: 18, bullet: true });
+      }
+
+      if (slideData.imageUrl && presentation.template !== 'visual-focus') {
+        slide.addImage({ data: slideData.imageUrl, x: 1, y: 4.5, w: 4, h: 2.25 });
+      }
+      if (slideData.imageUrl && presentation.template === 'visual-focus') {
+         slide.background = { data: slideData.imageUrl };
+      }
+    }
+    
+    await pptx.writeFile({ fileName: `${presentation.title}.pptx` });
+    setIsExporting(false);
+  };
+  
+    const exportToPdf = async () => {
+      if (!presentation) return;
+      setIsExporting(true);
+  
+      const slideDimensions = { width: 1120, height: 630 };
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'px',
+        format: [slideDimensions.width, slideDimensions.height],
+      });
+  
+      const tempContainer = document.createElement('div');
+      tempContainer.style.position = 'absolute';
+      tempContainer.style.left = '-9999px';
+      tempContainer.style.width = `${slideDimensions.width}px`;
+      tempContainer.style.height = `${slideDimensions.height}px`;
+      document.body.appendChild(tempContainer);
+      const root = createRoot(tempContainer);
+
+      for (let i = 0; i < presentation.slides.length; i++) {
+        const slide = presentation.slides[i];
+  
+        await new Promise<void>((resolve) => {
+          root.render(
+            <SlideTemplate
+              slide={slide}
+              template={presentation.template as any}
+              theme={presentation.theme as any}
+            />,
+          );
+
+          setTimeout(async () => {
+            const canvas = await html2canvas(tempContainer, {
+              scale: 2,
+              width: slideDimensions.width,
+              height: slideDimensions.height,
+              useCORS: true,
+              allowTaint: true,
+            });
+            const imgData = canvas.toDataURL('image/png');
+
+            if (i > 0) {
+              pdf.addPage([slideDimensions.width, slideDimensions.height]);
+            }
+            pdf.addImage(imgData, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight());
+            resolve();
+          }, 500); // Increased delay to ensure image loading
+        });
+      }
+
+      root.unmount();
+      document.body.removeChild(tempContainer);
+  
+      pdf.save(`${presentation.title}.pdf`);
+      setIsExporting(false);
+    };
+
+    const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          handleSlideContentChange(activeSlideIndex, 'imageUrl', reader.result as string);
+        };
+        reader.readAsDataURL(file);
+      }
+    };
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center h-screen"><Loader text="Loading Editor..." /></div>;
+  }
+
+  if (isExporting) {
+    return <div className="flex items-center justify-center h-screen"><Loader text="Exporting your presentation..." /></div>;
+  }
+
+  if (!presentation) {
+    return null;
+  }
+
+  const activeSlide = presentation.slides[activeSlideIndex];
+
+  return (
+    <div className="flex h-[calc(100vh-theme(height.14))] bg-muted/40">
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImageUpload}
+        className="hidden"
+        accept="image/*"
+      />
+      {/* Left Sidebar: Slide Thumbnails */}
+      <aside className="w-1/4 max-w-xs min-w-[280px] bg-background border-r flex flex-col">
+        <div className="p-4 border-b">
+          <h2 className="text-lg font-semibold truncate">{presentation.title}</h2>
+          <p className="text-sm text-muted-foreground">{presentation.slides.length} slides</p>
+        </div>
+        <ScrollArea className="flex-grow p-2">
+          <DndContext sensors={[]} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={presentation.slides.map(s => s.id)} strategy={verticalListSortingStrategy}>
+              {presentation.slides.map((slide, index) => (
+                <SortableSlideItem
+                  key={slide.id}
+                  slide={slide}
+                  index={index}
+                  isActive={index === activeSlideIndex}
+                  onSelect={() => setActiveSlideIndex(index)}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+        </ScrollArea>
+        <div className="p-4 border-t mt-auto">
+          <Button onClick={addSlide} className="w-full">
+            <FilePlus className="mr-2 h-4 w-4" /> Add Slide
+          </Button>
+        </div>
+      </aside>
+
+      {/* Main Content: Editor & Preview */}
+      <main className="flex-1 flex flex-col">
+        {/* Top bar for controls */}
+        <div className="bg-background border-b p-2 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div>
+              <span className="text-xs text-muted-foreground">Template</span>
+               <Select value={presentation.template} onValueChange={value => handleUpdate({ template: value })}>
+                  <SelectTrigger className="w-40 h-8">
+                    <SelectValue placeholder="Template" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TEMPLATES.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+            </div>
+             <div>
+              <span className="text-xs text-muted-foreground">Theme</span>
+                <Select value={presentation.theme} onValueChange={value => handleUpdate({ theme: value })}>
+                  <SelectTrigger className="w-28 h-8">
+                    <SelectValue placeholder="Theme" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {THEMES.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+            </div>
+             <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+              <ImagePlus className="mr-2 h-4 w-4" />
+              {activeSlide?.imageUrl ? 'Change Image' : 'Add Image'}
+            </Button>
+            {activeSlide?.imageUrl && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => handleSlideContentChange(activeSlideIndex, 'imageUrl', '')}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Remove Image
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm"><Share2 className="mr-2 h-4 w-4" /> Share</Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Download className="mr-2 h-4 w-4" />
+                  Export
+                  <ChevronDown className="ml-2 h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem onClick={exportToPdf}>PDF</DropdownMenuItem>
+                <DropdownMenuItem onClick={exportToPptx}>PPTX</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button onClick={() => router.push('/preview')} size="sm"><Eye className="mr-2 h-4 w-4" /> Preview</Button>
+          </div>
+        </div>
+
+        {/* Editor Area */}
+        <div className="flex-1 grid grid-cols-3 gap-6 p-6 overflow-auto">
+          <div ref={slideContainerRef} className="col-span-2 bg-background rounded-lg shadow-lg overflow-hidden">
+            {activeSlide ? (
+              <div className="w-full aspect-video">
+                  <SlideTemplate slide={activeSlide} template={presentation.template as any} theme={presentation.theme as any}/>
+              </div>
+            ) : <div className="flex items-center justify-center h-full">Select a slide to edit</div>}
+          </div>
+          
+          {/* Right Sidebar: Content Editor */}
+          <ScrollArea className="col-span-1 bg-background p-4 rounded-lg shadow-lg">
+             {activeSlide && (
+              <div className="space-y-6">
+                <div>
+                  <Label htmlFor="slideTitle" className="font-semibold">Slide Title</Label>
+                  <Textarea
+                    id="slideTitle"
+                    value={activeSlide.title}
+                    onChange={e => handleSlideContentChange(activeSlideIndex, 'title', e.target.value)}
+                    className="mt-1 text-lg font-bold"
+                    rows={2}
+                  />
+                </div>
+                <div>
+                  <h4 className="font-semibold mb-2">Bullet Points</h4>
+                  <div className="space-y-2">
+                    {activeSlide.bulletPoints.map((point, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <Textarea
+                          value={point}
+                          onChange={e => handleBulletPointChange(activeSlideIndex, i, e.target.value)}
+                          rows={2}
+                          className="flex-grow"
+                        />
+                        <Button variant="ghost" size="icon" onClick={() => removeBulletPoint(activeSlideIndex, i)}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => addBulletPoint(activeSlideIndex)} className="mt-2">Add Point</Button>
+                </div>
+
+                <Button variant="destructive" onClick={() => deleteSlide(activeSlideIndex)} className="w-full">
+                  <Trash2 className="mr-2 h-4 w-4" /> Delete Slide
+                </Button>
+              </div>
+            )}
+          </ScrollArea>
+        </div>
+      </main>
+    </div>
+  );
+}
