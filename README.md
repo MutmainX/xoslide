@@ -84,7 +84,6 @@ You can help by:
 ## 🚀 Get Involved
 
 - ⭐ **Star this repo** to show your support!
-- 🐦 Follow me on [Linedin](https://twitter.com/xoslide) (optional)
 - 💬 Join the discussion in [Discussions](https://github.com/your-username/xoslide/discussions)
 
 ---
