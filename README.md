@@ -11,6 +11,8 @@ Xoslide is a **free and open-source** presentation tool that turns your thoughts
 
 ### This Project is no longer maintained because I cant manage it by myself only, totally abandoning it.
 
+---
+
 ## 🌟 Features
 
 - **AI-Powered Generation**: Just provide a prompt — topic, text, or idea — and let AI do the rest.
