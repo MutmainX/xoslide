@@ -9,7 +9,7 @@ Xoslide is a **free and open-source** presentation tool that turns your thoughts
 
 ---
 
-### This Project is no longer maintained because I cant manage it by myself only, totally abandoning it.
+### This Project is no longer maintained because I cant manage and code it just by myself only, totally abandoning it.
 
 ---
 
